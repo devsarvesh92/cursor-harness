@@ -1,59 +1,82 @@
-import boto3
-import json
 import asyncio
+import json
 import logging
 from typing import Optional
+
+import boto3
 from botocore.exceptions import ClientError
 
 from .message_router import MessageRouter, UnknownEventTypeError
+from .retry import RetryPolicy, calculate_delay, is_transient_error
 
 logger = logging.getLogger(__name__)
 
+
 class SQSListener:
-    """SQS message listener with proper error handling and retry logic"""
-    
+    """SQS message listener with exponential-backoff retry for transient errors."""
+
     def __init__(
         self,
         queue_url: str,
         router: MessageRouter,
         dlq_url: Optional[str] = None,
-        max_retries: int = 3
+        retry_policy: Optional[RetryPolicy] = None,
     ):
-        self.sqs = boto3.client('sqs')
+        self.sqs = boto3.client("sqs")
         self.queue_url = queue_url
         self.dlq_url = dlq_url
         self.router = router
-        self.max_retries = max_retries
-    
+        self.retry_policy = retry_policy or RetryPolicy()
+
     async def process_message(self, message: dict) -> bool:
-        """
-        Process a single message with error handling.
-        
-        Returns:
-            True if message processed successfully, False otherwise
-        """
-        receipt_handle = message['ReceiptHandle']
-        message_body = json.loads(message['Body'])
-        
-        try:
-            await self.router.route(message_body)
+        receipt_handle = message["ReceiptHandle"]
+        message_body = json.loads(message["Body"])
+
+        last_error: Optional[Exception] = None
+        max_attempts = 1 + self.retry_policy.max_retries
+
+        for attempt in range(max_attempts):
+            try:
+                await self.router.route(message_body)
+                await self.acknowledge_message(receipt_handle)
+                return True
+            except Exception as e:
+                last_error = e
+
+                if not is_transient_error(e):
+                    return await self._handle_permanent_error(
+                        e, receipt_handle, message_body
+                    )
+
+                if attempt < self.retry_policy.max_retries:
+                    delay = calculate_delay(self.retry_policy, attempt)
+                    logger.warning(
+                        f"Retry {attempt + 1}/{self.retry_policy.max_retries} "
+                        f"in {delay:.2f}s — {e}"
+                    )
+                    await asyncio.sleep(delay)
+
+        logger.error(
+            f"Exhausted {self.retry_policy.max_retries} retries — {last_error}"
+        )
+        await self.send_to_dlq(message_body, str(last_error))
+        await self.acknowledge_message(receipt_handle)
+        return False
+
+    async def _handle_permanent_error(
+        self,
+        error: Exception,
+        receipt_handle: str,
+        message_body: dict,
+    ) -> bool:
+        if isinstance(error, UnknownEventTypeError):
+            logger.warning(f"Unknown event type: {error}")
             await self.acknowledge_message(receipt_handle)
-            return True
-        except UnknownEventTypeError as e:
-            logger.warning(f"Unknown event type: {e}")
-            await self.acknowledge_message(receipt_handle)  # Don't retry unknown types
-            return False
-        except ValueError as e:
-            logger.error(f"Validation error: {e}")
-            await self.send_to_dlq(message_body, str(e))
+        else:
+            logger.error(f"Permanent error: {error}")
+            await self.send_to_dlq(message_body, str(error))
             await self.acknowledge_message(receipt_handle)
-            return False
-        except Exception as e:
-            logger.error(f"Error processing message: {e}")
-            # In real implementation, would check retry count and use exponential backoff
-            await self.send_to_dlq(message_body, str(e))
-            await self.acknowledge_message(receipt_handle)
-            return False
+        return False
     
     async def acknowledge_message(self, receipt_handle: str) -> None:
         """Delete message from queue after successful processing"""
