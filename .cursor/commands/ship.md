@@ -54,12 +54,74 @@ Use the `pr-creation` skill (`.cursor/skills/pr-creation/SKILL.md`).
 
 ### Phase 5: Notify (Optional)
 
-If the environment variable `SLACK_WEBHOOK_URL` is set:
+If the environment variable `SLACK_WEBHOOK_URL` is set, post a rich Slack notification using Block Kit.
+
+Gather these values from the session before building the payload:
+
+| Variable | Source |
+|----------|--------|
+| `PR_TITLE` | PR title (imperative style) |
+| `PR_URL` | GitHub PR URL |
+| `BRANCH` | Feature branch name |
+| `JIRA_URL` | JIRA ticket URL (or "N/A") |
+| `COMMIT_COUNT` | Number of commits in the PR |
+| `FILES_CHANGED` | Number of files changed |
+| `TEST_RESULT` | "All passing" or summary of failures |
+| `TDD_CYCLES` | Number of red-green-refactor cycles completed |
 
 ```bash
 curl -s -X POST "$SLACK_WEBHOOK_URL" \
   -H 'Content-Type: application/json' \
-  -d "{\"text\": \"Ship complete: <PR title> — <PR URL>\"}"
+  -d '{
+  "blocks": [
+    {
+      "type": "header",
+      "text": { "type": "plain_text", "text": "🚢 Ship Complete", "emoji": true }
+    },
+    {
+      "type": "section",
+      "text": {
+        "type": "mrkdwn",
+        "text": "*<'"$PR_URL"'|'"$PR_TITLE"'>*"
+      }
+    },
+    { "type": "divider" },
+    {
+      "type": "section",
+      "fields": [
+        { "type": "mrkdwn", "text": "*Branch:*\n`'"$BRANCH"'`" },
+        { "type": "mrkdwn", "text": "*JIRA:*\n'"$JIRA_URL"'" },
+        { "type": "mrkdwn", "text": "*Commits:*\n'"$COMMIT_COUNT"'" },
+        { "type": "mrkdwn", "text": "*Files Changed:*\n'"$FILES_CHANGED"'" },
+        { "type": "mrkdwn", "text": "*Tests:*\n'"$TEST_RESULT"'" },
+        { "type": "mrkdwn", "text": "*TDD Cycles:*\n'"$TDD_CYCLES"'" }
+      ]
+    },
+    { "type": "divider" },
+    {
+      "type": "actions",
+      "elements": [
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "Review PR", "emoji": true },
+          "url": "'"$PR_URL"'",
+          "style": "primary"
+        },
+        {
+          "type": "button",
+          "text": { "type": "plain_text", "text": "View JIRA", "emoji": true },
+          "url": "'"$JIRA_URL"'"
+        }
+      ]
+    },
+    {
+      "type": "context",
+      "elements": [
+        { "type": "mrkdwn", "text": "Shipped via `/ship` • Cursor Harness" }
+      ]
+    }
+  ]
+}'
 ```
 
 Skip silently if `SLACK_WEBHOOK_URL` is not set.
