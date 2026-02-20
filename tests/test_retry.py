@@ -1,7 +1,9 @@
 import pytest
 from unittest.mock import patch
 
-from src.listener.retry import RetryPolicy, calculate_delay
+from botocore.exceptions import ClientError
+from src.listener.message_router import UnknownEventTypeError
+from src.listener.retry import RetryPolicy, calculate_delay, is_transient_error
 
 
 class TestRetryPolicyDefaults:
@@ -52,3 +54,33 @@ class TestCalculateDelay:
 
         mock_random.assert_called_once_with(0, 4.0)
         assert delay == 0.5
+
+
+class TestIsTransientError:
+    def test_value_error_is_permanent(self):
+        assert is_transient_error(ValueError("bad data")) is False
+
+    def test_unknown_event_type_error_is_permanent(self):
+        assert is_transient_error(UnknownEventTypeError("nope")) is False
+
+    def test_connection_error_is_transient(self):
+        assert is_transient_error(ConnectionError("refused")) is True
+
+    def test_timeout_error_is_transient(self):
+        assert is_transient_error(TimeoutError("timed out")) is True
+
+    def test_os_error_is_transient(self):
+        assert is_transient_error(OSError("network unreachable")) is True
+
+    def test_client_error_is_transient(self):
+        error = ClientError(
+            {"Error": {"Code": "ServiceUnavailable", "Message": "try later"}},
+            "ReceiveMessage",
+        )
+        assert is_transient_error(error) is True
+
+    def test_generic_runtime_error_defaults_to_transient(self):
+        assert is_transient_error(RuntimeError("unknown")) is True
+
+    def test_generic_exception_defaults_to_transient(self):
+        assert is_transient_error(Exception("surprise")) is True
