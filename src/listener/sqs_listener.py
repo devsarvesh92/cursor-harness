@@ -27,6 +27,7 @@ class SQSListener:
         self.dlq_url = dlq_url
         self.router = router
         self.retry_policy = retry_policy or RetryPolicy()
+        self._poll_error_streak = 0
 
     async def process_message(self, message: dict) -> bool:
         receipt_handle = message["ReceiptHandle"]
@@ -122,26 +123,29 @@ class SQSListener:
             logger.error(f"Failed to send message to DLQ: {e}")
     
     async def poll(self) -> None:
-        """Long-poll for messages from SQS"""
+        """Long-poll for messages from SQS with exponential backoff on errors."""
         try:
             response = self.sqs.receive_message(
                 QueueUrl=self.queue_url,
                 MaxNumberOfMessages=10,
-                WaitTimeSeconds=20,  # Long polling
-                MessageAttributeNames=['All']
+                WaitTimeSeconds=20,
+                MessageAttributeNames=["All"],
             )
-            
-            messages = response.get('Messages', [])
+
+            self._poll_error_streak = 0
+
+            messages = response.get("Messages", [])
             if messages:
                 logger.info(f"Received {len(messages)} messages")
-            
+
             for message in messages:
                 await self.process_message(message)
-                
+
         except ClientError as e:
-            logger.error(f"SQS polling error: {e}")
-            # Wait before retrying
-            await asyncio.sleep(5)
+            delay = calculate_delay(self.retry_policy, self._poll_error_streak)
+            logger.error(f"SQS polling error: {e} — backing off {delay:.2f}s")
+            self._poll_error_streak += 1
+            await asyncio.sleep(delay)
     
     async def run(self) -> None:
         """Main loop for polling messages"""

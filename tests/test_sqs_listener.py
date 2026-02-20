@@ -207,3 +207,100 @@ class TestVisibilityTimeoutExtension:
             if "visibility" in str(c).lower()
         ]
         assert len(visibility_logs) >= 1
+
+
+class TestPollingBackoff:
+    @pytest.mark.asyncio
+    async def test_poll_error_uses_exponential_backoff(self, listener):
+        # Arrange
+        listener.sqs.receive_message.side_effect = ClientError(
+            {"Error": {"Code": "ServiceUnavailable", "Message": "down"}},
+            "ReceiveMessage",
+        )
+
+        # Act
+        with patch("src.listener.sqs_listener.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await listener.poll()
+
+        # Assert — sleep was called with a value derived from backoff, not flat 5s
+        mock_sleep.assert_called_once()
+        delay = mock_sleep.call_args[0][0]
+        assert 0 <= delay <= listener.retry_policy.base_delay
+
+    @pytest.mark.asyncio
+    async def test_consecutive_poll_errors_increase_backoff(self, listener):
+        # Arrange
+        listener.sqs.receive_message.side_effect = ClientError(
+            {"Error": {"Code": "ServiceUnavailable", "Message": "down"}},
+            "ReceiveMessage",
+        )
+        delays = []
+
+        async def capture_delay(d):
+            delays.append(d)
+
+        # Act — poll three times in a row
+        with patch("src.listener.sqs_listener.asyncio.sleep", side_effect=capture_delay):
+            await listener.poll()
+            await listener.poll()
+            await listener.poll()
+
+        # Assert — three delays recorded, max bound increases each time
+        assert len(delays) == 3
+        policy = listener.retry_policy
+        for i, delay in enumerate(delays):
+            cap = min(policy.base_delay * (policy.backoff_factor ** i), policy.max_delay)
+            assert 0 <= delay <= cap
+
+    @pytest.mark.asyncio
+    async def test_successful_poll_resets_backoff(self, listener):
+        # Arrange — first call fails, second succeeds, third fails
+        error = ClientError(
+            {"Error": {"Code": "ServiceUnavailable", "Message": "down"}},
+            "ReceiveMessage",
+        )
+        listener.sqs.receive_message.side_effect = [
+            error,
+            {"Messages": []},
+            error,
+        ]
+        delays = []
+
+        async def capture_delay(d):
+            delays.append(d)
+
+        # Act
+        with patch("src.listener.sqs_listener.asyncio.sleep", side_effect=capture_delay):
+            await listener.poll()   # fail -> attempt 0 backoff
+            await listener.poll()   # success -> reset
+            await listener.poll()   # fail -> attempt 0 backoff again (reset)
+
+        # Assert — both error delays bounded by attempt-0 cap (reset happened)
+        assert len(delays) == 2
+        cap_attempt_0 = listener.retry_policy.base_delay
+        assert 0 <= delays[0] <= cap_attempt_0
+        assert 0 <= delays[1] <= cap_attempt_0
+
+    @pytest.mark.asyncio
+    async def test_polling_backoff_capped_at_max_delay(self, listener):
+        # Arrange — use a policy with aggressive factor to hit the cap fast
+        listener.retry_policy = RetryPolicy(
+            base_delay=1.0, backoff_factor=100.0, max_delay=5.0
+        )
+        listener.sqs.receive_message.side_effect = ClientError(
+            {"Error": {"Code": "ServiceUnavailable", "Message": "down"}},
+            "ReceiveMessage",
+        )
+        delays = []
+
+        async def capture_delay(d):
+            delays.append(d)
+
+        # Act — poll twice so attempt=1 would be 100.0 without cap
+        with patch("src.listener.sqs_listener.asyncio.sleep", side_effect=capture_delay):
+            await listener.poll()
+            await listener.poll()
+
+        # Assert
+        assert len(delays) == 2
+        assert delays[1] <= 5.0
