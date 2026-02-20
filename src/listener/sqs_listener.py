@@ -54,6 +54,7 @@ class SQSListener:
                         f"Retry {attempt + 1}/{self.retry_policy.max_retries} "
                         f"in {delay:.2f}s — {e}"
                     )
+                    self._extend_visibility(receipt_handle, delay)
                     await asyncio.sleep(delay)
 
         logger.error(
@@ -78,6 +79,18 @@ class SQSListener:
             await self.acknowledge_message(receipt_handle)
         return False
     
+    def _extend_visibility(self, receipt_handle: str, delay: float) -> None:
+        """Best-effort extension of SQS visibility timeout to cover the retry delay."""
+        timeout = int(delay) + 30
+        try:
+            self.sqs.change_message_visibility(
+                QueueUrl=self.queue_url,
+                ReceiptHandle=receipt_handle,
+                VisibilityTimeout=timeout,
+            )
+        except ClientError as e:
+            logger.warning(f"Failed to extend visibility timeout: {e}")
+
     async def acknowledge_message(self, receipt_handle: str) -> None:
         """Delete message from queue after successful processing"""
         try:

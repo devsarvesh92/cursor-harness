@@ -1,6 +1,8 @@
 import json
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
+
+from botocore.exceptions import ClientError
 
 from src.listener.message_router import MessageRouter, UnknownEventTypeError
 from src.listener.retry import RetryPolicy
@@ -141,3 +143,67 @@ class TestProcessMessagePermanentErrors:
         assert router.route.call_count == 1  # no retries
         listener.send_to_dlq.assert_not_called()
         listener.acknowledge_message.assert_called_once()
+
+
+class TestVisibilityTimeoutExtension:
+    @pytest.mark.asyncio
+    async def test_extends_visibility_before_retry(self, listener, router):
+        # Arrange
+        router.route = AsyncMock(
+            side_effect=[ConnectionError("refused"), None]
+        )
+        message = make_sqs_message({"type": "user.created", "data": {}})
+
+        # Act
+        await listener.process_message(message)
+
+        # Assert — change_message_visibility was called for the retry
+        listener.sqs.change_message_visibility.assert_called_once()
+        call_kwargs = listener.sqs.change_message_visibility.call_args
+        assert call_kwargs[1]["QueueUrl"] == listener.queue_url
+        assert call_kwargs[1]["ReceiptHandle"] == "test-receipt-handle"
+        assert call_kwargs[1]["VisibilityTimeout"] > 0
+
+    @pytest.mark.asyncio
+    async def test_visibility_extension_failure_does_not_block_retry(
+        self, listener, router
+    ):
+        # Arrange
+        router.route = AsyncMock(
+            side_effect=[ConnectionError("refused"), None]
+        )
+        listener.sqs.change_message_visibility.side_effect = ClientError(
+            {"Error": {"Code": "InvalidParameterValue", "Message": "bad"}},
+            "ChangeMessageVisibility",
+        )
+        message = make_sqs_message({"type": "user.created", "data": {}})
+
+        # Act
+        result = await listener.process_message(message)
+
+        # Assert — retry still succeeded despite visibility extension failure
+        assert result is True
+        assert router.route.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_visibility_extension_logs_on_failure(self, listener, router):
+        # Arrange
+        router.route = AsyncMock(
+            side_effect=[ConnectionError("refused"), None]
+        )
+        listener.sqs.change_message_visibility.side_effect = ClientError(
+            {"Error": {"Code": "InvalidParameterValue", "Message": "bad"}},
+            "ChangeMessageVisibility",
+        )
+        message = make_sqs_message({"type": "user.created", "data": {}})
+
+        # Act
+        with patch("src.listener.sqs_listener.logger") as mock_logger:
+            await listener.process_message(message)
+
+        # Assert
+        visibility_logs = [
+            c for c in mock_logger.warning.call_args_list
+            if "visibility" in str(c).lower()
+        ]
+        assert len(visibility_logs) >= 1
