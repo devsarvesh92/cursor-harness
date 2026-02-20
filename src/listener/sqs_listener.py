@@ -12,18 +12,19 @@ logger = logging.getLogger(__name__)
 class SQSListener:
     """SQS message listener with proper error handling and retry logic"""
     
+    MAX_RETRIES = 1
+    BASE_DELAY_SECONDS = 1.0
+
     def __init__(
         self,
         queue_url: str,
         router: MessageRouter,
         dlq_url: Optional[str] = None,
-        max_retries: int = 3
     ):
         self.sqs = boto3.client('sqs')
         self.queue_url = queue_url
         self.dlq_url = dlq_url
         self.router = router
-        self.max_retries = max_retries
     
     async def process_message(self, message: dict) -> bool:
         """
@@ -41,7 +42,7 @@ class SQSListener:
             return True
         except UnknownEventTypeError as e:
             logger.warning(f"Unknown event type: {e}")
-            await self.acknowledge_message(receipt_handle)  # Don't retry unknown types
+            await self.acknowledge_message(receipt_handle)
             return False
         except ValueError as e:
             logger.error(f"Validation error: {e}")
@@ -50,10 +51,28 @@ class SQSListener:
             return False
         except Exception as e:
             logger.error(f"Error processing message: {e}")
-            # In real implementation, would check retry count and use exponential backoff
-            await self.send_to_dlq(message_body, str(e))
-            await self.acknowledge_message(receipt_handle)
-            return False
+            return await self._retry_or_dlq(message_body, receipt_handle, e)
+
+    async def _retry_or_dlq(
+        self, message_body: dict, receipt_handle: str, original_error: Exception
+    ) -> bool:
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            delay = self.BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+            logger.info(
+                f"Retrying message, attempt {attempt}/{self.MAX_RETRIES}"
+            )
+            await asyncio.sleep(delay)
+            try:
+                await self.router.route(message_body)
+                await self.acknowledge_message(receipt_handle)
+                return True
+            except Exception as e:
+                logger.error(f"Retry {attempt}/{self.MAX_RETRIES} failed: {e}")
+                original_error = e
+
+        await self.send_to_dlq(message_body, str(original_error))
+        await self.acknowledge_message(receipt_handle)
+        return False
     
     async def acknowledge_message(self, receipt_handle: str) -> None:
         """Delete message from queue after successful processing"""
