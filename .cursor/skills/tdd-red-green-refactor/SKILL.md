@@ -9,7 +9,23 @@ description: Applies disciplined TDD using red-green-refactor cycles with atomic
 
 Implement behavior through small cycles: failing test first, minimal passing code, then clean up safely.
 
+## Test Plan Preview
+
+Before writing any code, present a complete test plan for user review:
+
+1. List every test that will be written — name, what it asserts, and which acceptance criterion it covers.
+2. Use the table format below.
+3. **Checkpoint**: Wait for explicit user sign-off before proceeding to TDD cycles.
+
+```markdown
+| # | Test Name | Asserts | Acceptance Criterion |
+|---|-----------|---------|----------------------|
+| 1 | `test_<behavior>` | <what the test verifies> | <which AC it covers> |
+```
+
 ## Cycle
+
+After the test plan is approved:
 
 1. **Red**: Write one focused failing test that defines the next behavior.
 2. **Green**: Write the minimum production code to make that test pass.
@@ -19,6 +35,7 @@ Implement behavior through small cycles: failing test first, minimal passing cod
 
 ## Rules
 
+- Never start TDD cycles without an approved test plan.
 - Never add production logic without a failing test.
 - Change one behavior per cycle.
 - Run relevant tests after each step (`make test` or project equivalent).
