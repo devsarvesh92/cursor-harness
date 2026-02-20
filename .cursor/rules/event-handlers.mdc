@@ -1,0 +1,39 @@
+---
+description: Standards for writing event handlers — thin, focused, observable, idempotent
+globs: src/handlers/**/*.py
+alwaysApply: false
+---
+
+# Event Handler Rules
+
+## Structure
+
+- Extend `MessageHandler` ABC and implement `async def handle(self, message: dict) -> None`.
+- One handler per event type, one responsibility per handler.
+- Keep handlers thin: validate input, orchestrate service/repo calls, return.
+
+## Error Handling
+
+- Classify errors explicitly — use `ValueError` for validation, `UnknownEventTypeError` for unregistered event types, and domain-specific exceptions as needed.
+- When introducing new error types (e.g. `DatabaseError`, `ExternalAPIError`), define them in a shared module before referencing.
+- Never catch bare `Exception` inside a handler; let the listener/router decide retry policy.
+
+## Observability
+
+- Log with context: `event_type`, `message_id`, and retry metadata.
+- Use `logger = logging.getLogger(__name__)` at module level.
+
+## Idempotency
+
+- Design handlers to be safe for re-delivery (SQS at-least-once).
+- Use unique constraints or idempotency keys where retries are possible.
+
+## Transactions
+
+```python
+async with self.repo.db.begin():
+    entity = await self.repo.create(data)
+    await self.service.notify(entity.id)
+```
+
+Both succeed or both roll back.

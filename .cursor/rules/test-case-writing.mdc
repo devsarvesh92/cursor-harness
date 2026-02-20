@@ -1,0 +1,46 @@
+---
+description: How to write effective test cases — naming, structure, coverage, isolation
+globs: tests/**/*.py
+alwaysApply: false
+---
+
+# Test Case Writing
+
+## Naming
+
+- `test_<expected_behavior>` — describes what is being verified, not how.
+- Examples: `test_rejects_message_without_type`, `test_creates_user_and_sends_email`.
+
+## Structure
+
+Use Arrange-Act-Assert:
+
+```python
+async def test_routes_known_event_to_handler():
+    # Arrange
+    router = MessageRouter()
+    handler = FakeHandler()
+    router.register("user.created", handler)
+
+    # Act
+    await router.route({"type": "user.created", "data": {}})
+
+    # Assert
+    assert handler.called
+```
+
+## Coverage Strategy
+
+- Happy path first, then edge cases, then failure path.
+- Add a regression test before fixing any bug.
+
+## Isolation
+
+- Mock only external boundaries (network, DB, third-party APIs).
+- Keep each test independent and deterministic.
+- Prefer fakes/stubs over deep mock chains.
+
+## Assertions
+
+- Assert behavior and outputs, not internal implementation.
+- Verify error types and messages where behavior depends on them.

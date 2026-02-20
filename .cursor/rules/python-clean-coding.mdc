@@ -1,0 +1,42 @@
+---
+description: Python clean coding practices for readability, maintainability, and safe changes
+globs: src/**/*.py
+alwaysApply: false
+---
+
+# Python Clean Coding
+
+## Functions
+
+- Small, focused functions with explicit names.
+- Use type hints for all signatures and return values.
+- Use early returns to reduce nesting.
+
+## Error Handling
+
+```python
+# Bad
+try:
+    process()
+except Exception:
+    pass
+
+# Good
+try:
+    await process()
+except ValueError as e:
+    logger.error(f"Validation failed: {e}")
+    raise DomainError("Processing failed") from e
+```
+
+## Side Effects
+
+- Keep side effects explicit — I/O, DB, network calls should be obvious in the call chain.
+- Separate orchestration from pure logic when possible.
+
+## Style
+
+- Replace magic values with named constants.
+- Follow PEP 8, max line length 100.
+- Use f-strings for formatting.
+- Avoid circular imports; keep module boundaries clear.
