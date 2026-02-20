@@ -26,9 +26,14 @@ Use the `jira-creator` skill (`.cursor/skills/jira-creator/SKILL.md`).
 2. Break plan tasks into JIRA subtasks.
 3. Create a feature branch: `feat/<PROJ-ID>-short-description`.
 
-### Phase 3: Implement (TDD)
+### Phase 3a: Test Plan Review
 
 Use the `tdd-red-green-refactor` skill (`.cursor/skills/tdd-red-green-refactor/SKILL.md`).
+
+1. Draft a test plan table listing every test to be written — name, assertion, and which acceptance criterion it covers.
+2. **Checkpoint**: Present the test plan — wait for user sign-off before writing any code.
+
+### Phase 3b: Implement (TDD)
 
 For each task/subtask:
 
@@ -135,6 +140,7 @@ Skip silently if `SLACK_WEBHOOK_URL` is not set.
   │
   ├─ Brainstorm → questions → acceptance criteria → plan
   ├─ JIRA → story + subtasks → feature branch
+  ├─ Test Plan Review → present tests → wait for sign-off
   ├─ Implement → TDD cycles → atomic commits
   ├─ PR → summary + test plan + JIRA link
   └─ Notify → Slack (if configured)
