@@ -16,13 +16,14 @@ harness/
 ├── src/
 │   ├── handlers/      # Message handlers
 │   ├── listener/      # SQS listener and router
-│   ├── database/     # Database models and repositories
+│   ├── database/      # Database models and repositories
 │   └── services/      # Service layer
 ├── .cursor/
-│   ├── rules/        # Coding standards (guides improvements)
+│   ├── rules/         # Coding standards (guides improvements)
 │   ├── skills/        # Domain knowledge (guides patterns)
-│   └── commands/     # Workflows
-├── tests/             # Comprehensive tests
+│   └── commands/      # Workflows
+├── tests/             # Tests
+├── Makefile           # Project commands
 └── main.py            # Entry point
 ```
 
@@ -30,17 +31,13 @@ harness/
 
 ```bash
 # Sync dependencies
-uv sync
+make sync
 
 # Run the listener
-uv run python -m src.main
-```
+make run
 
-## Tests
-
-```bash
 # Run tests
-uv run pytest tests/ -v
+make test
 ```
 
 ## Key Difference
