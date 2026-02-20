@@ -1,0 +1,47 @@
+---
+description: Python coding standards and best practices
+globs: **/*.py
+alwaysApply: false
+---
+
+# Python Coding Standards
+
+## Code Style
+
+- Follow PEP 8 style guidelines
+- Use type hints for all function signatures
+- Maximum line length: 100 characters
+- Use f-strings for string formatting
+
+## Error Handling
+
+```python
+# ❌ BAD
+try:
+    result = process_data()
+except:
+    pass
+
+# ✅ GOOD
+try:
+    result = process_data()
+except ValueError as e:
+    logger.error(f"Invalid data: {e}")
+    raise DataProcessingError(f"Failed to process data: {e}") from e
+```
+
+## Type Hints
+
+Always include type hints:
+
+```python
+# ✅ GOOD
+def calculate_total(items: list[dict[str, float]]) -> float:
+    return sum(item.get("price", 0.0) for item in items)
+```
+
+## Documentation
+
+- Use docstrings for all public functions and classes
+- Follow Google-style docstrings
+- Include parameter descriptions and return types

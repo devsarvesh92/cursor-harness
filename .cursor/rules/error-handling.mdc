@@ -1,0 +1,72 @@
+---
+description: Error handling and classification patterns
+alwaysApply: true
+---
+
+# Error Handling
+
+## Error Classification
+
+Always classify errors appropriately:
+
+```python
+# ✅ GOOD
+class ValidationError(Exception):
+    """Data validation failed - don't retry"""
+    pass
+
+class DatabaseError(Exception):
+    """Database operation failed - retry"""
+    pass
+
+class ExternalAPIError(Exception):
+    """External service failed - retry with backoff"""
+    pass
+
+class FatalError(Exception):
+    """Unrecoverable error - send to DLQ"""
+    pass
+```
+
+## Error Handling Pattern
+
+```python
+# ❌ BAD
+try:
+    process()
+except Exception as e:
+    print(f"Error: {e}")
+
+# ✅ GOOD
+try:
+    await process()
+except ValidationError as e:
+    logger.warning(f"Validation failed: {e}")
+    await dlq.send(message)
+except DatabaseError as e:
+    logger.error(f"Database error: {e}")
+    if retry_count < MAX_RETRIES:
+        await retry_with_backoff(message)
+    else:
+        await dlq.send(message)
+except FatalError as e:
+    logger.critical(f"Fatal error: {e}")
+    await dlq.send(message)
+```
+
+## Logging Errors
+
+Always log errors with context:
+
+```python
+# ✅ GOOD
+logger.error(
+    "Failed to process message",
+    extra={
+        "message_id": message["id"],
+        "event_type": message["type"],
+        "error": str(e),
+        "retry_count": retry_count
+    }
+)
+```
