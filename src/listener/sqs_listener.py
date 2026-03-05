@@ -2,12 +2,17 @@ import boto3
 import json
 import asyncio
 import logging
+import random
 from typing import Optional
 from botocore.exceptions import ClientError
 
 from .message_router import MessageRouter, UnknownEventTypeError
 
 logger = logging.getLogger(__name__)
+
+BASE_BACKOFF_SECONDS = 2.0
+MAX_BACKOFF_SECONDS = 900
+
 
 class SQSListener:
     """SQS message listener with proper error handling and retry logic"""
@@ -25,23 +30,48 @@ class SQSListener:
         self.router = router
         self.max_retries = max_retries
     
+    async def _change_visibility(self, receipt_handle: str, timeout: int) -> None:
+        """Set visibility timeout so SQS redelivers after the backoff period."""
+        try:
+            self.sqs.change_message_visibility(
+                QueueUrl=self.queue_url,
+                ReceiptHandle=receipt_handle,
+                VisibilityTimeout=timeout,
+            )
+        except ClientError as e:
+            logger.error(f"Failed to change message visibility: {e}")
+
+    def _calculate_backoff(self, attempt: int) -> float:
+        """Exponential backoff with jitter, capped at MAX_BACKOFF_SECONDS."""
+        delay = BASE_BACKOFF_SECONDS * (2 ** (attempt - 1))
+        jitter = random.uniform(0, BASE_BACKOFF_SECONDS)
+        return min(delay + jitter, MAX_BACKOFF_SECONDS)
+
+    def _get_receive_count(self, message: dict) -> int:
+        """Extract ApproximateReceiveCount, defaulting to 1 if absent."""
+        try:
+            return int(message.get("Attributes", {}).get("ApproximateReceiveCount", "1"))
+        except (ValueError, TypeError):
+            return 1
+
     async def process_message(self, message: dict) -> bool:
         """
-        Process a single message with error handling.
-        
+        Process a single message with retry-aware error handling.
+
         Returns:
-            True if message processed successfully, False otherwise
+            True if message processed successfully, False otherwise.
         """
-        receipt_handle = message['ReceiptHandle']
-        message_body = json.loads(message['Body'])
-        
+        receipt_handle = message["ReceiptHandle"]
+        message_body = json.loads(message["Body"])
+        receive_count = self._get_receive_count(message)
+
         try:
             await self.router.route(message_body)
             await self.acknowledge_message(receipt_handle)
             return True
         except UnknownEventTypeError as e:
             logger.warning(f"Unknown event type: {e}")
-            await self.acknowledge_message(receipt_handle)  # Don't retry unknown types
+            await self.acknowledge_message(receipt_handle)
             return False
         except ValueError as e:
             logger.error(f"Validation error: {e}")
@@ -49,10 +79,19 @@ class SQSListener:
             await self.acknowledge_message(receipt_handle)
             return False
         except Exception as e:
-            logger.error(f"Error processing message: {e}")
-            # In real implementation, would check retry count and use exponential backoff
-            await self.send_to_dlq(message_body, str(e))
-            await self.acknowledge_message(receipt_handle)
+            if receive_count >= self.max_retries:
+                logger.error(
+                    f"Retries exhausted ({receive_count}/{self.max_retries}): {e}"
+                )
+                await self.send_to_dlq(message_body, str(e))
+                await self.acknowledge_message(receipt_handle)
+            else:
+                backoff = int(self._calculate_backoff(receive_count))
+                logger.warning(
+                    f"Transient error (attempt {receive_count}/{self.max_retries}), "
+                    f"retrying in {backoff}s: {e}"
+                )
+                await self._change_visibility(receipt_handle, backoff)
             return False
     
     async def acknowledge_message(self, receipt_handle: str) -> None:
@@ -91,8 +130,9 @@ class SQSListener:
             response = self.sqs.receive_message(
                 QueueUrl=self.queue_url,
                 MaxNumberOfMessages=10,
-                WaitTimeSeconds=20,  # Long polling
-                MessageAttributeNames=['All']
+                WaitTimeSeconds=20,
+                MessageAttributeNames=['All'],
+                AttributeNames=['ApproximateReceiveCount'],
             )
             
             messages = response.get('Messages', [])
